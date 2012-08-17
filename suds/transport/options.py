@@ -44,6 +44,18 @@ class Options(Skin):
         - B{password} - The password used for http authentication.
                 - type: I{str}
                 - default: None
+        - B{compression} - Request HTTP answer to be compressed
+            Possible values are:
+                - type: I{str}
+                    - I{str} B(yes)   - Compression will be requested and handled
+                    - I{str} B(no)    - No compression requested nor handled
+                    - I{str} B(auto)  - No compression request but automatic handling if found
+                - default: yes
+        - B{compmethods} - Compression methods to request
+            Supported methods: gzip, deflate, bzip2
+                - type: I{list}
+                - default: B{[gzip, deflate, bzip2]}
+
     """    
     def __init__(self, **kwargs):
         domain = __name__
@@ -53,5 +65,7 @@ class Options(Skin):
             Definition('headers', dict, {}),
             Definition('username', basestring, None),
             Definition('password', basestring, None),
+            Definition('compression', basestring, 'yes'),
+            Definition('compmethods', list, ['gzip', 'deflate', 'bzip2']),
         ]
         Skin.__init__(self, domain, definitions, kwargs)

@@ -13,19 +13,28 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
 # written by: Jeff Ortel ( jortel@redhat.com )
+# compression support and rewritten by: Daniel Rodriguez ( danjrod@gmail.com )
 
 """
 Contains classes for basic HTTP transport implementations.
 """
 
-import urllib2 as u2
 import base64
+import bz2
+import copy
+import cStringIO
+import gzip
 import socket
-from suds.transport import *
-from suds.properties import Unskin
+import urllib2 as u2
+import zlib
+
 from urlparse import urlparse
 from cookielib import CookieJar
 from logging import getLogger
+
+from suds.transport import *
+from suds.properties import Unskin
+
 
 log = getLogger(__name__)
 
@@ -48,43 +57,120 @@ class HttpTransport(Transport):
                     - default: 90
         """
         Transport.__init__(self)
+
+        # Add options to the default set of options in case they do not exist
+        Unskin(self.options).definitions['compression'] = Definition('compression', basestring, 'yes')
+        Unskin(self.options).definitions['compmethods'] = Definition('compmethods', list, ['gzip', 'deflate', 'bzip2'])
+        # Force the new options to take the default value supplied
+        Unskin(self.options).prime()
+
         Unskin(self.options).update(kwargs)
         self.cookiejar = CookieJar()
-        self.proxy = {}
+        self.proxy = dict()
         self.urlopener = None
-        
+
+    # This implementation of "open" and "send"
+    # could make it to the base class "Transport"
+
     def open(self, request):
-        try:
-            url = request.url
-            log.debug('opening (%s)', url)
-            u2request = u2.Request(url)
-            self.proxy = self.options.proxy
-            return self.u2open(u2request)
-        except u2.HTTPError, e:
-            raise TransportError(str(e), e.code, e.fp)
+        """
+        Open a file or url
+        If request.url can't be identified as a url, it will
+        return the content in a file-like object
+        @param request: A suds Request
+        @type Request: suds.transport.Request
+        @return: A file-like object
+        @rtype: file
+        """
+        log.debug('opening: (%s)', request.url)
+
+        fp = None
+        location = request.url.lstrip()
+        if location.startswith('<?'):
+            log.debug('returning url (%s) as StringIO file')
+            fp = cStringIO.StringIO(location)
+        else:
+            parsed = urlparse(request.url)
+            if parsed.scheme == 'file':
+                log.debug('opening file (%s) with open', parsed.path)
+                try:
+                    fp = open(parsed.path)
+                except Exception, e:
+                    raise TransportError(str(e), 500, None)
+            else:
+                log.debug('opening scheme (%s) over the network', parsed.scheme)
+                fp = self.invoke(request, retfile=True)
+
+        return fp
 
     def send(self, request):
-        result = None
-        url = request.url
-        msg = request.message
-        headers = request.headers
+        """
+        Send a soap request
+        @param request: A suds Request
+        @type Request: suds.transport.Request
+        @return: suds Reply
+        @rtype: suds.transport.Reply
+        """
+        log.debug('sending: %s', request)
+        return self.invoke(request)
+
+    # for the base class Transport
+    # this would be the definition of "invoke"
+    # called by either open or send
+    #
+    # def invoke(self, request, retfile = False):
+    #     raise NotImplementedError
+
+    def invoke(self, request, retfile=False):
+        """
+        Open a connection.
+        @param request: A suds Request
+        @type Request: suds.transport.Request
+        @param retfile: indicates if a file-like object is to be returned
+        @type: bool 
+        @return: A file-like object or a suds Reply
+        @rtype: file or suds.transport.Reply
+        """
+        tm = self.options.timeout
+
+        request = self.prerequest(request)
+        u2request = u2.Request(request.url, request.message, request.headers)
+
+        self.addcookies(u2request)
+
+        request.headers = u2request.headers
+        log.debug('request final headers:\n%s', request.headers)
+
+        urlopener = self.u2opener()
         try:
-            u2request = u2.Request(url, msg, headers)
-            self.addcookies(u2request)
-            self.proxy = self.options.proxy
-            request.headers.update(u2request.headers)
-            log.debug('sending:\n%s', request)
-            fp = self.u2open(u2request)
-            self.getcookies(fp, u2request)
-            result = Reply(200, fp.headers.dict, fp.read())
-            log.debug('received:\n%s', result)
+            if self.u2ver() < 2.6:
+                socket.settimeout(tm)
+                u2response = urlopener.open(u2request)
+            else:
+                u2response = urlopener.open(u2request, timeout=tm)
         except u2.HTTPError, e:
-            if e.code in (202,204):
+            # This error is to mimic the original exception code
+            if not retfile and e.code in (202, 204):
                 result = None
             else:
                 raise TransportError(e.msg, e.code, e.fp)
-        return result
 
+        # Updatecookies in the cookie jar
+        self.getcookies(u2response, u2request)
+
+        reply = Reply(200, u2response.headers.dict, u2response.read())
+        reply = self.postreply(reply)
+        log.debug('received reply:\n%s', reply)
+
+        # Return what "open" is expecting ... a file-like object
+        if retfile:
+            reply = cStringIO.StringIO(reply.message)
+
+        return reply
+            
+    # I would personally remove this function
+    # it is a one-liner that would substitute a one liner
+    
     def addcookies(self, u2request):
         """
         Add cookies in the cookiejar to the request.
@@ -93,41 +179,35 @@ class HttpTransport(Transport):
         """
         self.cookiejar.add_cookie_header(u2request)
         
-    def getcookies(self, fp, u2request):
+    # I would personally remove this function
+    # it is a one-liner that would substitute a one liner
+    def getcookies(self, u2response, u2request):
         """
         Add cookies in the request to the cookiejar.
         @param u2request: A urllib2 request.
         @rtype: u2request: urllib2.Requet.
         """
-        self.cookiejar.extract_cookies(fp, u2request)
+        self.cookiejar.extract_cookies(u2response, u2request)
         
-    def u2open(self, u2request):
-        """
-        Open a connection.
-        @param u2request: A urllib2 request.
-        @type u2request: urllib2.Requet.
-        @return: The opened file-like urllib2 object.
-        @rtype: fp
-        """
-        tm = self.options.timeout
-        url = self.u2opener()
-        if self.u2ver() < 2.6:
-            socket.setdefaulttimeout(tm)
-            return url.open(u2request)
-        else:
-            return url.open(u2request, timeout=tm)
-            
+    # I think there was a bug in the original code since self.urlopener
+    # was never assigned a value and the code kept on creating a new
+    # opener
+
+    # Of course if self.urlopener is None or self.options.proxy have changed
+    # a new urlopener has to be created and stored
     def u2opener(self):
         """
         Create a urllib opener.
         @return: An opener.
         @rtype: I{OpenerDirector}
         """
-        if self.urlopener is None:
-            return u2.build_opener(*self.u2handlers())
-        else:
-            return self.urlopener
+        if self.urlopener == None or self.proxy != self.options.proxy:
+            self.urlopener = u2.build_opener(*self.u2handlers())
+
+        return self.urlopener
         
+    # Make a copy (if needed) of the options.proxy to detect changes
+    # during runtime
     def u2handlers(self):
         """
         Get a collection of urllib handlers.
@@ -135,6 +215,7 @@ class HttpTransport(Transport):
         @rtype: [Handler,...]
         """
         handlers = []
+        self.proxy = copy.copy(self.options.proxy)
         handlers.append(u2.ProxyHandler(self.proxy))
         return handlers
             
@@ -158,6 +239,60 @@ class HttpTransport(Transport):
         cp = Unskin(clone.options)
         cp.update(p)
         return clone
+
+    # This function pre-processes the request before sending it
+    # In my opinion, the base class Transport should define it as an empty stub
+    # or simply with "return request"
+
+    # The HttpAuthenticated (below) is a perfect example, because instead of
+    # redifining "open" and "send" to add the credentials it would only
+    # redefine "preprequest" and then call the baseclass.prequest
+
+    def prerequest(self, request):
+
+        if self.options.compression == 'yes':
+            compmethods = ','.join(self.options.compmethods)
+            request.headers['Accept-Encoding'] = compmethods
+            log.debug('requesting the following compressions: %s', compmethods)
+
+        return request
+
+    # This function post-processes the reply after receiving it (obvious!)
+    # In my opinion, the base class Transport should define it as an empty stub
+    # or simply with "return reply"
+
+    def postreply(self, reply):
+
+        if self.options.compression in ['yes', 'auto']:
+            for header, headerval in reply.headers.items():
+                if header.lower() == 'content-encoding':
+                    log.debug('http reply with a content-encoding header')
+                    if headerval == 'gzip':
+                        log.debug('decompressing gzip content')
+                        replydatafile = cStringIO.StringIO(reply.message)
+                        gzipper = gzip.GzipFile(fileobj=replydatafile)
+                        reply.message = gzipper.read()
+                    elif headerval == 'deflate':
+                        # decompress the deflate content
+                        log.debug('decompressing deflate content')
+                        try:
+                            reply.message = zlib.decompress(reply.message)
+                        except zlib.error:
+                            # Many web sites fail to send the first bytes of the header
+                            reply.message = zlib.decompress(reply.message, -zlib.MAX_WBITS)
+                    elif headerval == 'bzip2':
+                        # decompress bzip content
+                        log.debug('decompressing unix compress content')
+                        reply.message = bz2.decompress(reply.message)
+                        pass
+                    else:
+                        # unknown scheme
+                        log.debug('unsupported content-encoding scheme')
+                        pass
+
+                    break
+
+        return reply
 
 
 class HttpAuthenticated(HttpTransport):
