@@ -33,7 +33,7 @@ from cookielib import CookieJar
 from logging import getLogger
 
 from suds.transport import *
-from suds.properties import Unskin
+from suds.properties import Unskin, Definition
 
 
 log = getLogger(__name__)
