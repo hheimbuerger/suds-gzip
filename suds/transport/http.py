@@ -153,7 +153,12 @@ class HttpTransport(Transport):
             if not retfile and e.code in (202, 204):
                 result = None
             else:
-                raise TransportError(e.msg, e.code, e.fp)
+                # use the same postreply() call to decode an error response
+                body = e.read()
+                reply = Reply(e.code, e.headers, body)
+                reply = self.postreply(reply)
+                memfile = cStringIO.StringIO(reply.message)
+                raise TransportError(reply.message, e.code, memfile)
 
         # Updatecookies in the cookie jar
         self.getcookies(u2response, u2request)
@@ -264,7 +269,7 @@ class HttpTransport(Transport):
     def postreply(self, reply):
 
         if self.options.compression in ['yes', 'auto']:
-            for header, headerval in reply.headers.items():
+            for header, headerval in reply.headers.items():   # this needs to be items() and not iteritems() because it's sometimes an httplib.HTTPMessage (when decoding an error response) and that doesn't support iteritems()!
                 if header.lower() == 'content-encoding':
                     log.debug('http reply with a content-encoding header')
                     if headerval == 'gzip':
