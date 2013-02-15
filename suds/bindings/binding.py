@@ -257,6 +257,10 @@ class Binding:
         sax = Parser()
         faultroot = sax.parse(string=reply)
         soapenv = faultroot.getChild('Envelope')
+        if soapenv is None:
+            # If there isn't an <Envelope>, then we probably got a regular 500 error page (HTML) back. Not sure what to do
+            # in this case, let's throw a generic exception (non-WebFault) for now.
+            raise RuntimeError('Server returned HTTP status code 500, but no SOAP envelope could be found in the response:\n%s' % str(faultroot))
         soapbody = soapenv.getChild('Body')
         fault = soapbody.getChild('Fault')
         unmarshaller = self.unmarshaller(False)
