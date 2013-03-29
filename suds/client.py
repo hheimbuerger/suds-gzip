@@ -715,7 +715,7 @@ class SoapClient:
             else:
                 return (status, None)
         if self.options.faults:
-            raise Exception((status, reason))
+            raise TransportError(reason, status)
         else:
             return (status, None)
 
