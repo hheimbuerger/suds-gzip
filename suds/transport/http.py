@@ -92,9 +92,12 @@ class HttpTransport(Transport):
         else:
             parsed = urlparse(request.url)
             if parsed.scheme == 'file':
-                log.debug('opening file (%s) with open', parsed.path)
+                # the path component of the urlparse output is not automatically a valid filesystem path!
+                filepath = u2.url2pathname(parsed.path)
+                
+                log.debug('opening file (%s) with open', filepath)
                 try:
-                    fp = open(parsed.path)
+                    fp = open(filepath)
                 except Exception, e:
                     raise TransportError(str(e), 500, None)
             else:
