@@ -190,7 +190,7 @@ class FileCache(Cache):
     def put(self, id, bfr):
         try:
             fn = self.__fn(id)
-            f = self.open(fn, 'w')
+            f = self.open(fn, 'wb')
             f.write(bfr)
             f.close()
             return bfr
@@ -201,7 +201,7 @@ class FileCache(Cache):
     def putf(self, id, fp):
         try:
             fn = self.__fn(id)
-            f = self.open(fn, 'w')
+            f = self.open(fn, 'wb')
             f.write(fp.read())
             fp.close()
             f.close()
@@ -223,7 +223,7 @@ class FileCache(Cache):
         try:
             fn = self.__fn(id)
             self.validate(fn)
-            return self.open(fn)
+            return self.open(fn, 'rb')
         except:
             pass
 
@@ -329,7 +329,7 @@ class ObjectCache(FileCache):
                 return None
             else:
                 return pickle.load(fp)
-        except:
+        except Exception as exc:
             FileCache.purge(self, id)
     
     def put(self, id, object):
