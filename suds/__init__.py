@@ -78,6 +78,10 @@ class WebFault(Exception):
         self.fault = fault
         self.document = document
 
+class ServerErrorMissingSoapEnvelope(Exception):
+    def __init__(self, document):
+        Exception.__init__(self, "Server returned error (500), but no SOAP envelope could be found in the response. Document received: %s" % tostr(document).replace('\n', ''))
+
 #
 # Logging
 #
