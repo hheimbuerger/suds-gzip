@@ -667,6 +667,18 @@ class SoapClient:
         if isinstance(action, unicode):
             action = action.encode('utf-8')
         stock = { 'Content-Type' : 'text/xml; charset=utf-8', 'SOAPAction': action }
+
+        # At this point the action was encoded, but the vanilla suds code takes all injected headers as they are,
+        # potentially implicitly decoding the whole request into a unicode string, if there's any unicode in the
+        # headers (e.g. because you're like me and trying to be clever and Python 3 compatible by using
+        # unicode_literals. This causes all kinds of horrible pains, as I've had to repeatedly notice. We could
+        # silently encode everything here, but I'll go the safer(?) route and just reject all unicode strings.
+        for k, v in self.options.headers.items():
+            if type(k) != str:
+                raise ValueError("'%s' header has a non-string name, but only (encoded/non-unicode) strings are allowed" % repr(k)) 
+            if type(v) != str:
+                raise ValueError("'%s' header has a non-string value, but only (encoded/non-unicode) strings are allowed: %s" % (k, repr(v))) 
+
         result = dict(stock, **self.options.headers)
         log.debug('headers = %s', result)
         return result
