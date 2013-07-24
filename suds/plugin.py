@@ -194,7 +194,10 @@ class PluginContainer:
         @type plugins: [L{Plugin},]
         """
         self.plugins = plugins
-    
+
+    def __repr__(self):
+        return '<suds.plugin.PluginContainer instance>'
+
     def __getattr__(self, name):
         domain = self.domains.get(name)
         if domain:
